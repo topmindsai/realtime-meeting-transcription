@@ -32,6 +32,13 @@ interface TextMessage {
   };
 }
 
+interface SpeakerInfo {
+  name: string;
+  id: number;
+  timestamp: number;
+  isSpeaking: boolean;
+}
+
 type Message = AudioMessage | TranscriptionMessage | TextMessage;
 
 // Helper function to safely inspect message content
@@ -88,6 +95,7 @@ class TranscriptionProxy {
   private meetingBaasClients: Set<WebSocket> = new Set();
   private gladiaClient: GladiaClient;
   private isGladiaSessionActive: boolean = false;
+  private lastSpeaker: string | null = null;
 
   constructor() {
     // Single WebSocket server
@@ -184,12 +192,39 @@ class TranscriptionProxy {
         // Try to identify if it's audio data
         try {
           const jsonStr = message.toString("utf8");
-          JSON.parse(jsonStr);
-          // If we get here, it's JSON, not audio data
-          logger.info(`Message from MeetingBaas: ${inspectMessage(message)}`);
+          const jsonData = JSON.parse(jsonStr);
+
+          // If it's speaker information
+          if (
+            Array.isArray(jsonData) &&
+            jsonData.length > 0 &&
+            "name" in jsonData[0] &&
+            "isSpeaking" in jsonData[0]
+          ) {
+            const speakerInfo = jsonData[0] as SpeakerInfo;
+
+            // Only log when a new speaker starts talking (different from the last one)
+            // or when we haven't seen any speaker yet
+            if (
+              speakerInfo.isSpeaking &&
+              (this.lastSpeaker === null ||
+                this.lastSpeaker !== speakerInfo.name)
+            ) {
+              // Update our last speaker tracking
+              this.lastSpeaker = speakerInfo.name;
+
+              // Log the new speaker
+              logger.info(
+                `New speaker: ${speakerInfo.name} (id: ${speakerInfo.id})`
+              );
+            }
+
+            // For other JSON messages, log as usual without speaker tracking
+          } else {
+            logger.info(`Message from MeetingBaas: ${inspectMessage(message)}`);
+          }
         } catch {
           // Likely audio data, send to Gladia for transcription
-
           if (this.isGladiaSessionActive) {
             this.gladiaClient.sendAudioChunk(message);
           }
@@ -218,6 +253,34 @@ class TranscriptionProxy {
 
     ws.on("error", (error) => {
       logger.error("MeetingBaas client error:", error);
+    });
+  }
+
+  public async shutdown(): Promise<void> {
+    // End the Gladia session if it's active
+    if (this.isGladiaSessionActive) {
+      logger.info("Ending Gladia transcription session...");
+      await this.gladiaClient.endSession();
+      this.isGladiaSessionActive = false;
+    }
+
+    // Close all client connections
+    this.meetingBaasClients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.close();
+      }
+    });
+
+    if (this.botClient && this.botClient.readyState === WebSocket.OPEN) {
+      this.botClient.close();
+    }
+
+    // Close the WebSocket server
+    return new Promise((resolve) => {
+      this.server.close(() => {
+        logger.info("WebSocket server closed");
+        resolve();
+      });
     });
   }
 }

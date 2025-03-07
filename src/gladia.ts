@@ -81,11 +81,15 @@ class GladiaClient {
           const isFinal = message.data.is_final;
 
           if (utterance && utterance.text) {
-            logger.info(
-              `Transcription ${isFinal ? "(final)" : "(partial)"}: ${
-                utterance.text
-              }`
-            );
+            // only log if it's final, remove this
+            // if you want to log partial transcripts
+            if (isFinal) {
+              logger.info(
+                `Transcription ${isFinal ? "(final)" : "(partial)"}: ${
+                  utterance.text
+                }`
+              );
+            }
 
             if (this.onTranscriptionCallback) {
               this.onTranscriptionCallback(utterance.text, isFinal);
